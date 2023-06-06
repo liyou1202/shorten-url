@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cloud.google.com/go/storage"
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"io"
@@ -16,6 +17,30 @@ type StaticFileInfo struct {
 	path        string
 	name        string
 	contentType string
+}
+
+//	ShortenedRecord {
+//	   "origin": "https://liyou-chen.site/#skills",
+//	   "shorten": "https://liyou-chen.site/abcd",
+//	   "createTime": "1686023936"
+//	}
+type ShortenedRecord struct {
+	Origin     string `json:"origin"`
+	Shorten    string `json:"shorten"`
+	CreateTime string `json:"createTime"`
+}
+
+// PostData {
+// "scheme": "https",
+// "domain": "liyou-chen.site",
+// "path": "#skills",
+// "query": ""
+// }
+type PostData struct {
+	scheme string `json:"scheme"`
+	Domain string `json:"domain"`
+	Path   string `json:"path"`
+	Query  string `json:"query"`
 }
 
 const (
@@ -132,4 +157,45 @@ func staticFileHandler(w http.ResponseWriter, r *http.Request, info StaticFileIn
 	}
 
 	http.ServeContent(w, r, info.name, reader.Attrs.LastModified, bytes.NewReader(data))
+}
+
+func readJsonFromBucket[T any](container T, bucketName, path string) (T, error) {
+	bkt := client.Bucket(bucketName)
+	obj := bkt.Object(path)
+
+	reader, err := obj.NewReader(ctx)
+	if err != nil {
+		return container, fmt.Errorf("Failed to read object: %v ", err)
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return container, fmt.Errorf("Failed to read data: %v ", err)
+	}
+	fmt.Sprintf("bucket is: %s \n path is: %s \n data is: %s", BucketName, path, string(data))
+	err = json.Unmarshal(data, &container)
+	if err != nil {
+		return container, fmt.Errorf("Failed to parse JSON: %v ", err)
+	}
+
+	return container, nil
+}
+
+func writeToBucket(data []byte, bucketName, path string) error {
+	bkt := client.Bucket(bucketName)
+	obj := bkt.Object(path)
+
+	w := obj.NewWriter(ctx)
+	w.ContentType = "application/json"
+	w.CacheControl = "no-cache"
+
+	_, err := w.Write(data)
+	if err != nil {
+		return err
+	}
+	if err = w.Close(); err != nil {
+		return err
+	}
+	return nil
 }
