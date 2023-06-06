@@ -5,6 +5,7 @@ import (
 	"cloud.google.com/go/storage"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"io"
@@ -44,6 +45,17 @@ type PostData struct {
 	Path   string `json:"path"`
 }
 
+//	PostResp{
+//		isSuccess: "true",
+//		shortenStr: "a1b2c3",
+//		message: ""
+//	}
+type PostRespBody struct {
+	IsSuccess  string `json:"isSuccess"`
+	ShortenStr string `json:"shortenStr"`
+	Message    string `json:"message"`
+}
+
 const (
 	BucketName        = "shorten-url-static-bucket"
 	StaticsFilePath   = "statics"
@@ -59,14 +71,20 @@ func init() {
 }
 
 func RequestHandler(w http.ResponseWriter, r *http.Request) {
+	respBody := &PostRespBody{
+		IsSuccess:  "false",
+		ShortenStr: "",
+		Message:    "",
+	}
+
 	ctx = context.Background()
 	var err error
 
 	client, err = storage.NewClient(ctx)
 	if err != nil {
-		msg := fmt.Sprintf("Could not get context or connect to client: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(msg))
+		respBody.Message = fmt.Sprintf("Could not get context or connect to client: %s", err)
+		responseFormattedWriter(w, *respBody, http.StatusInternalServerError)
+		return
 	}
 	defer client.Close()
 
@@ -82,10 +100,10 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	p := r.URL.Path
+	path := r.URL.Path
 	pattern := regexp.MustCompile("/statics/(.+.(js|css))")
 
-	if p == "/" {
+	if path == "/" {
 		html := StaticFileInfo{
 			path:        filepath.Join(StaticsFilePath, HtmlName),
 			name:        HtmlName,
@@ -94,13 +112,13 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 		staticFileHandler(w, r, html)
 		return
 
-	} else if pattern.MatchString(p) {
+	} else if pattern.MatchString(path) {
 		//Handle static resources e.g. js, css
-		match := pattern.FindStringSubmatch(p)
+		match := pattern.FindStringSubmatch(path)
 		if len(match) != 3 {
-			msg := fmt.Sprintf("File not found or content-type not be supported %s", p)
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(msg))
+			respBody.Message = fmt.Sprintf("File not found or content-type not be supported %s", path)
+			responseFormattedWriter(w, *respBody, http.StatusNotFound)
+			return
 		}
 
 		fileInfo := StaticFileInfo{
@@ -111,44 +129,51 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 		staticFileHandler(w, r, fileInfo)
 		return
 
-	} else if p == "/shorten" {
-		shortenHandler(w, r)
+	} else if path == "/shorten" {
+		shortened, err := shortenUrl(r.Body)
+		if err != nil {
+			respBody.Message = err.Error()
+			responseFormattedWriter(w, *respBody, http.StatusBadRequest)
+			return
+		}
+
+		respBody.IsSuccess = "true"
+		respBody.ShortenStr = shortened
+		responseFormattedWriter(w, *respBody, http.StatusOK)
 		return
 	}
 
-	//TODO Handle url redirection action
-	w.WriteHeader(http.StatusMovedPermanently)
-	w.Write([]byte("connection success"))
+	redirectUrl, err := getOriginUrlByShorten(path)
+	if err != nil {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 }
 
-func shortenHandler(w http.ResponseWriter, r *http.Request) {
+func shortenUrl(reqBody io.ReadCloser) (string, error) {
 	var data PostData
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(reqBody)
 	err := decoder.Decode(&data)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("POST body decode failed"))
-		return
+		return "", errors.New("failed to decode post body")
 	}
-	defer r.Body.Close()
+	defer reqBody.Close()
+
 	longUrl := url.URL{
 		Scheme: data.Scheme,
 		Host:   data.Domain,
 		Path:   data.Path,
 	}
 
-	shortenString, err := getRecordShorten(longUrl.String())
+	shortenString, err := queryShortenFromRecord(longUrl.String())
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Record parsing failed"))
-		return
+		return "", errors.New("failed to parse record")
 	}
 
 	if shortenString != "" {
-		//TODO Return shorten URL using json formatted
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(shortenString))
-		return
+		return shortenString, nil
 	}
 
 	shortenString = generateRandomShortenString()
@@ -160,14 +185,10 @@ func shortenHandler(w http.ResponseWriter, r *http.Request) {
 
 	err = addToRecord(newRecord)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Failed to add new data to record"))
-		return
+		return "", errors.New("failed to add new data to record")
 	}
 
-	//TODO Return shorten URL using json formatted
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(shortenString))
+	return shortenString, nil
 }
 
 func addToRecord(newData *ShortenedRecord) error {
@@ -199,7 +220,7 @@ func generateRandomShortenString() string {
 	return string(b)
 }
 
-func getRecordShorten(queryString string) (string, error) {
+func queryShortenFromRecord(queryString string) (string, error) {
 	var records []ShortenedRecord
 	data, err := readJsonFromBucket(records, BucketName, ShortenRecordName)
 	if err != nil {
@@ -212,6 +233,21 @@ func getRecordShorten(queryString string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func getOriginUrlByShorten(shorten string) (string, error) {
+	var records []ShortenedRecord
+	data, err := readJsonFromBucket(records, BucketName, ShortenRecordName)
+	if err != nil {
+		return "", err
+	}
+
+	for _, v := range data {
+		if v.Shorten == shorten {
+			return v.Origin, nil
+		}
+	}
+	return "", errors.New("Corresponding origin URL could not be found ")
 }
 
 func staticFileHandler(w http.ResponseWriter, r *http.Request, info StaticFileInfo) {
@@ -288,4 +324,12 @@ func writeToBucket(data []byte, bucketName, path string) error {
 		return err
 	}
 	return nil
+}
+
+func responseFormattedWriter(w http.ResponseWriter, body PostRespBody, statusCode int) {
+	json, _ := json.Marshal(body)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(json)
 }
