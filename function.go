@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"io"
+	"math/rand"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"regexp"
+	"time"
 )
 
 type StaticFileInfo struct {
@@ -21,7 +24,7 @@ type StaticFileInfo struct {
 
 //	ShortenedRecord {
 //	   "origin": "https://liyou-chen.site/#skills",
-//	   "shorten": "https://liyou-chen.site/abcd",
+//	   "shorten": "abcd",
 //	   "createTime": "1686023936"
 //	}
 type ShortenedRecord struct {
@@ -34,19 +37,18 @@ type ShortenedRecord struct {
 // "scheme": "https",
 // "domain": "liyou-chen.site",
 // "path": "#skills",
-// "query": ""
 // }
 type PostData struct {
-	scheme string `json:"scheme"`
+	Scheme string `json:"scheme"`
 	Domain string `json:"domain"`
 	Path   string `json:"path"`
-	Query  string `json:"query"`
 }
 
 const (
-	BucketName      = "shorten-url-static-bucket"
-	StaticsFilePath = "statics"
-	HtmlName        = "index.html"
+	BucketName        = "shorten-url-static-bucket"
+	StaticsFilePath   = "statics"
+	HtmlName          = "index.html"
+	ShortenRecordName = "shortenRecord.json"
 )
 
 var ctx context.Context
@@ -100,7 +102,7 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(msg))
 		}
-		fmt.Sprintf("match is : %v", match)
+
 		fileInfo := StaticFileInfo{
 			path:        filepath.Join(StaticsFilePath, match[1]),
 			name:        match[1],
@@ -119,9 +121,97 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("connection success"))
 }
 
-// TODO Generate shorten url store to data storage and return result to API caller
 func shortenHandler(w http.ResponseWriter, r *http.Request) {
+	var data PostData
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&data)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("POST body decode failed"))
+		return
+	}
+	defer r.Body.Close()
+	longUrl := url.URL{
+		Scheme: data.Scheme,
+		Host:   data.Domain,
+		Path:   data.Path,
+	}
 
+	shortenString, err := getRecordShorten(longUrl.String())
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Record parsing failed"))
+		return
+	}
+
+	if shortenString != "" {
+		//TODO Return shorten URL using json formatted
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(shortenString))
+		return
+	}
+
+	shortenString = generateRandomShortenString()
+	newRecord := &ShortenedRecord{
+		Origin:     longUrl.String(),
+		Shorten:    shortenString,
+		CreateTime: time.Now().UTC().String(),
+	}
+
+	err = addToRecord(newRecord)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("Failed to add new data to record"))
+		return
+	}
+
+	//TODO Return shorten URL using json formatted
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(shortenString))
+}
+
+func addToRecord(newData *ShortenedRecord) error {
+	var records []ShortenedRecord
+	data, err := readJsonFromBucket(records, BucketName, ShortenRecordName)
+	if err != nil {
+		return err
+	}
+	data = append(data, *newData)
+
+	jsonByte, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	return writeToBucket(jsonByte, BucketName, ShortenRecordName)
+}
+
+func generateRandomShortenString() string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	rand.Seed(time.Now().UnixNano())
+
+	b := make([]byte, 6)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
+	}
+
+	//TODO Check random shortened string is unique
+	return string(b)
+}
+
+func getRecordShorten(queryString string) (string, error) {
+	var records []ShortenedRecord
+	data, err := readJsonFromBucket(records, BucketName, ShortenRecordName)
+	if err != nil {
+		return "", err
+	}
+
+	for _, v := range data {
+		if v.Origin == queryString {
+			return v.Shorten, nil
+		}
+	}
+	return "", nil
 }
 
 func staticFileHandler(w http.ResponseWriter, r *http.Request, info StaticFileInfo) {
