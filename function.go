@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"time"
 )
 
@@ -183,7 +184,7 @@ func shortenUrl(reqBody io.ReadCloser) (string, error) {
 	newRecord := &ShortenedRecord{
 		Origin:     longUrl.String(),
 		Shorten:    shortenString,
-		CreateTime: string(time.Now().Unix()),
+		CreateTime: strconv.Itoa(int(time.Now().Unix())),
 	}
 
 	err = addToRecord(newRecord)
