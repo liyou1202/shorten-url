@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -143,7 +144,9 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectUrl, err := getOriginUrlByShorten(path)
+	// remove / from url.path
+	shortenString := path[1:]
+	redirectUrl, err := getOriginUrlByShorten(shortenString)
 	if err != nil {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(err.Error()))
@@ -180,7 +183,7 @@ func shortenUrl(reqBody io.ReadCloser) (string, error) {
 	newRecord := &ShortenedRecord{
 		Origin:     longUrl.String(),
 		Shorten:    shortenString,
-		CreateTime: time.Now().UTC().String(),
+		CreateTime: string(time.Now().Unix()),
 	}
 
 	err = addToRecord(newRecord)
@@ -241,7 +244,8 @@ func getOriginUrlByShorten(shorten string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
+	log.Println("shorten: " + shorten)
+	log.Println(data)
 	for _, v := range data {
 		if v.Shorten == shorten {
 			return v.Origin, nil
