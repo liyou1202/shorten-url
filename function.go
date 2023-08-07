@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -59,7 +58,7 @@ type PostRespBody struct {
 }
 
 const (
-	BucketName        = "shorten-url-static-bucket"
+	BucketName        = "shorten-url-static-files"
 	StaticsFilePath   = "statics"
 	HtmlName          = "index.html"
 	ShortenRecordName = "shortenRecord.json"
@@ -213,8 +212,7 @@ func addToRecord(newData *ShortenedRecord) error {
 
 func generateRandomShortenString() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	rand.Seed(time.Now().UnixNano())
-
+	rand.NewSource(time.Now().UnixNano())
 	b := make([]byte, 6)
 	for i := range b {
 		b[i] = charset[rand.Intn(len(charset))]
@@ -245,8 +243,7 @@ func getOriginUrlByShorten(shorten string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	log.Println("shorten: " + shorten)
-	log.Println(data)
+
 	for _, v := range data {
 		if v.Shorten == shorten {
 			return v.Origin, nil
@@ -304,7 +301,7 @@ func readJsonFromBucket[T any](container T, bucketName, path string) (T, error) 
 	if err != nil {
 		return container, fmt.Errorf("Failed to read data: %v ", err)
 	}
-	fmt.Sprintf("bucket is: %s \n path is: %s \n data is: %s", BucketName, path, string(data))
+
 	err = json.Unmarshal(data, &container)
 	if err != nil {
 		return container, fmt.Errorf("Failed to parse JSON: %v ", err)
@@ -332,9 +329,9 @@ func writeToBucket(data []byte, bucketName, path string) error {
 }
 
 func responseFormattedWriter(w http.ResponseWriter, body PostRespBody, statusCode int) {
-	json, _ := json.Marshal(body)
+	jsonFormatted, _ := json.Marshal(body)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	w.Write(json)
+	w.Write(jsonFormatted)
 }
