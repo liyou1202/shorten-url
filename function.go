@@ -1,7 +1,6 @@
 package shorten_url
 
 import (
-	"bytes"
 	"cloud.google.com/go/storage"
 	"context"
 	"encoding/json"
@@ -12,8 +11,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"path/filepath"
-	"regexp"
 	"strconv"
 	"time"
 )
@@ -58,9 +55,7 @@ type PostRespBody struct {
 }
 
 const (
-	BucketName        = "shorten-url-static-files"
-	StaticsFilePath   = "statics"
-	HtmlName          = "index.html"
+	BucketName        = "shorten.liyou-chen.com"
 	ShortenRecordName = "shortenRecord.json"
 )
 
@@ -102,35 +97,7 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	path := r.URL.Path
-	pattern := regexp.MustCompile("/statics/(.+.(js|css))")
-
-	if path == "/" {
-		html := StaticFileInfo{
-			path:        filepath.Join(StaticsFilePath, HtmlName),
-			name:        HtmlName,
-			contentType: "html",
-		}
-		staticFileHandler(w, r, html)
-		return
-
-	} else if pattern.MatchString(path) {
-		//Handle static resources e.g. js, css
-		match := pattern.FindStringSubmatch(path)
-		if len(match) != 3 {
-			respBody.Message = fmt.Sprintf("File not found or content-type not be supported %s", path)
-			responseFormattedWriter(w, *respBody, http.StatusNotFound)
-			return
-		}
-
-		fileInfo := StaticFileInfo{
-			path:        filepath.Join(StaticsFilePath, match[1]),
-			name:        match[1],
-			contentType: match[2],
-		}
-		staticFileHandler(w, r, fileInfo)
-		return
-
-	} else if path == "/shorten" {
+	if r.Method == "POST" && path == "/shorten" {
 		shortened, err := shortenUrl(r.Body)
 		if err != nil {
 			respBody.Message = err.Error()
@@ -142,17 +109,18 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 		respBody.ShortenStr = shortened
 		responseFormattedWriter(w, *respBody, http.StatusOK)
 		return
+	} else if r.Method == "GET" {
+		// remove / from url.path
+		shortenString := path[1:]
+		redirectUrl, err := getOriginUrlByShorten(shortenString)
+		if err != nil {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(err.Error()))
+			return
+		}
+		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 	}
 
-	// remove / from url.path
-	shortenString := path[1:]
-	redirectUrl, err := getOriginUrlByShorten(shortenString)
-	if err != nil {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(err.Error()))
-		return
-	}
-	http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 }
 
 func shortenUrl(reqBody io.ReadCloser) (string, error) {
@@ -212,7 +180,8 @@ func addToRecord(newData *ShortenedRecord) error {
 
 func generateRandomShortenString() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	rand.NewSource(time.Now().UnixNano())
+	rand.Seed(time.Now().UnixNano())
+
 	b := make([]byte, 6)
 	for i := range b {
 		b[i] = charset[rand.Intn(len(charset))]
@@ -250,41 +219,6 @@ func getOriginUrlByShorten(shorten string) (string, error) {
 		}
 	}
 	return "", errors.New("Corresponding origin URL could not be found ")
-}
-
-func staticFileHandler(w http.ResponseWriter, r *http.Request, info StaticFileInfo) {
-	bkt := client.Bucket(BucketName)
-	obj := bkt.Object(info.path)
-
-	reader, err := obj.NewReader(ctx)
-	if err != nil {
-		msg := fmt.Sprintf("File not found %s", info.path)
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(msg))
-	}
-	defer reader.Close()
-
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		msg := fmt.Sprintf("Unable to read file %s", info.path)
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(msg))
-	}
-
-	if info.contentType == "html" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write(data)
-		return
-	}
-
-	if info.contentType == "js" {
-		w.Header().Set("Content-Type", "application/javascript")
-	} else if info.contentType == "css" {
-		w.Header().Set("Content-Type", "text/css")
-	}
-
-	http.ServeContent(w, r, info.name, reader.Attrs.LastModified, bytes.NewReader(data))
 }
 
 func readJsonFromBucket[T any](container T, bucketName, path string) (T, error) {
@@ -329,9 +263,9 @@ func writeToBucket(data []byte, bucketName, path string) error {
 }
 
 func responseFormattedWriter(w http.ResponseWriter, body PostRespBody, statusCode int) {
-	jsonFormatted, _ := json.Marshal(body)
+	json, _ := json.Marshal(body)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	w.Write(jsonFormatted)
+	w.Write(json)
 }
