@@ -45,26 +45,28 @@
         };
         modal.show();
 
-        fetch('https://redirect.liyou-chen.com/shorten', {
-            method: 'POST',
-            body: JSON.stringify(parsedUrl)
-        }).then((response) => {
-            modal.hide();
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.json();
-        }).then((data) => {
-            if (data.isSuccess === "true" && data.shortenStr !== "") {
-                let redirectURL = new URL("https://redirect.liyou-chen.com/" + data.shortenStr)
-                addListItem(redirectURL, originURL)
-                bindListGroup()
-            } else {
-                alert("Failed to shorten URL:", data.message);
-            }
-        }).catch(error => {
-            console.error('Something wrong:', error);
-        })
+        Promise.all([
+            new Promise(resolve => setTimeout(resolve, 2000)), // 2 秒後解析
+            fetch('https://redirect.liyou-chen.com/shorten', {
+                method: 'POST',
+                body: JSON.stringify(parsedUrl)
+            }).then(response => {
+
+                return response.json();
+            }).then(data => {
+                if (data.isSuccess === "true" && data.shortenStr !== "") {
+                    let redirectURL = new URL("https://redirect.liyou-chen.com/" + data.shortenStr)
+                    addListItem(redirectURL, originURL)
+                    bindListGroup()
+                } else {
+                    alert("Failed to shorten URL:", data.message);
+                }
+            }).catch(error => {
+                console.error('Something wrong:', error);
+            })
+        ]).then(() => {
+            modal.hide(); // 隱藏 modal
+        });
     }
 
 // Toast
