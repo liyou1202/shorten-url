@@ -35,6 +35,7 @@
             }
         })(originURL);
         if (testedURL == null) {
+            alert(`Wrong URL: ${originURL}`)
             return
         }
 
