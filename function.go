@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
+	"github.com/gin-gonic/gin"
 	"io"
 	"math/rand"
 	"net/http"
@@ -62,17 +63,17 @@ const (
 var ctx context.Context
 var client *storage.Client
 
+var respBody = &PostRespBody{
+	IsSuccess:  "false",
+	ShortenStr: "",
+	Message:    "",
+}
+
 func init() {
 	functions.HTTP("RequestHandler", RequestHandler)
 }
 
 func RequestHandler(w http.ResponseWriter, r *http.Request) {
-	respBody := &PostRespBody{
-		IsSuccess:  "false",
-		ShortenStr: "",
-		Message:    "",
-	}
-
 	ctx = context.Background()
 	var err error
 
@@ -96,31 +97,33 @@ func RequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	path := r.URL.Path
-	if r.Method == "POST" && path == "/shorten" {
-		shortened, err := shortenUrl(r.Body)
-		if err != nil {
-			respBody.Message = err.Error()
-			responseFormattedWriter(w, *respBody, http.StatusBadRequest)
-			return
-		}
+	router := gin.Default()
+	router.POST("/shorten", shortenHandler)
+	router.GET("/:shorten", redirectHandler)
+	router.ServeHTTP(w, r)
+}
 
-		respBody.IsSuccess = "true"
-		respBody.ShortenStr = shortened
-		responseFormattedWriter(w, *respBody, http.StatusOK)
+func redirectHandler(c *gin.Context) {
+	shortenString := c.Param("shorten")
+	redirectUrl, err := getOriginUrlByShorten(shortenString)
+	if err != nil {
+		c.String(http.StatusOK, err.Error())
 		return
-	} else if r.Method == "GET" {
-		// remove / from url.path
-		shortenString := path[1:]
-		redirectUrl, err := getOriginUrlByShorten(shortenString)
-		if err != nil {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(err.Error()))
-			return
-		}
-		http.Redirect(w, r, redirectUrl, http.StatusSeeOther)
 	}
+	c.Redirect(http.StatusSeeOther, redirectUrl)
+}
 
+func shortenHandler(c *gin.Context) {
+	fmt.Println(c.Request.Body)
+	shortened, err := shortenUrl(c.Request.Body)
+	if err != nil {
+		respBody.Message = err.Error()
+		c.JSON(http.StatusBadRequest, respBody)
+		return
+	}
+	respBody.IsSuccess = "true"
+	respBody.ShortenStr = shortened
+	c.JSON(http.StatusOK, respBody)
 }
 
 func shortenUrl(reqBody io.ReadCloser) (string, error) {
