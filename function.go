@@ -74,33 +74,43 @@ func init() {
 }
 
 func RequestHandler(w http.ResponseWriter, r *http.Request) {
+	// Connect with GCP services
 	ctx = context.Background()
 	var err error
 
 	client, err = storage.NewClient(ctx)
 	if err != nil {
 		respBody.Message = fmt.Sprintf("Could not get context or connect to client: %s", err)
-		responseFormattedWriter(w, *respBody, http.StatusInternalServerError)
+		marshaledJson, _ := json.Marshal(respBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write(marshaledJson)
 		return
 	}
 	defer client.Close()
 
-	// Set CORS headers for request.
-	if r.Method == http.MethodOptions {
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Max-Age", "3600")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-
 	router := gin.Default()
+	// Set CORS headers for request.
+	router.Use(CORSMiddleware())
 	router.POST("/shorten", shortenHandler)
 	router.GET("/:shorten", redirectHandler)
 	router.ServeHTTP(w, r)
+}
+
+func CORSMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	}
 }
 
 func redirectHandler(c *gin.Context) {
